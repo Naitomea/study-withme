@@ -6,6 +6,8 @@ import uuid
 import json
 import random
 import PySimpleGUI as sg
+import asyncio
+import websockets
 
 from timeUtils import timeToStr
 
@@ -395,6 +397,22 @@ def minimizedWindow():
 
     return retVal
 
+# Test
+async def hello():
+    global pseudo
+
+    uri = "ws://localhost:8080"
+    async with websockets.connect(uri) as ws:
+        data = json.dumps({
+            'code': 5,
+            'data': pseudo
+        })
+        await ws.send(data)
+        print(f"> {pseudo}")
+
+        greeting = await ws.recv()
+        print(f"< {greeting}")
+
 # Main entry
 def main():
     global pseudo
@@ -404,6 +422,8 @@ def main():
     # if pseudo is None:
     #     return
     pseudo = "Naitomea"
+
+    asyncio.get_event_loop().run_until_complete(hello())
 
     # Launch windows loop (main loop)
     currentMode = WindowMode.NORMAL
