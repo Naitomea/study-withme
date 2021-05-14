@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import Enum, IntEnum
 import os
 import time
 import math
@@ -8,6 +8,7 @@ import random
 import PySimpleGUI as sg
 import asyncio
 import websockets
+import queue
 
 from timeUtils import timeToStr
 
@@ -18,12 +19,56 @@ class WindowMode(Enum):
     MINIMIZED = "_MINIMIZED_"
     SYSTEM_TRAY = "_SYSTEM_TRAY_"
 
+# Enum Net
+
+
+class MessageCode(IntEnum):
+    ADMIN = 0
+    MESSAGE = 1
+    ACTION = 2
+    USERS = 3
+    LOGIN = 5
+    LOGOUT = 6
+    SIGNUP = 7
+
+
+class ActionType(IntEnum):
+    START = 0
+    BREAK = 1
+    STOP = 2
+
+
+class UserState(IntEnum):
+    REST = 0
+    WORK = 1
+    BREAK = 2
+
 
 # Global vars
-pseudo = ""
+asyncLoop = None
+running = True
+
+win = None
+winMode = WindowMode.NORMAL
+
+# State
+pseudo = None
 stime, inWork = -1, False
 
-# Functions
+userList = []
+userIdx = 0
+
+# Net
+msgQueue = queue.Queue()
+
+# Net state
+pseudoAccepted = False
+
+#############
+# Functions #
+#############
+
+
 def getSyncTime(ctime):
     syncTime = 4200 - ctime % 4200
     if syncTime > 600:
@@ -33,8 +78,14 @@ def getSyncTime(ctime):
 
     return cSyncTime, inBreak
 
-# Windows
-def promptPseudo():
+######
+# UI #
+######
+
+
+async def promptPseudo():
+    global pseudo
+
     sg.theme("Dark")
 
     layout = [
@@ -44,11 +95,15 @@ def promptPseudo():
             sg.Button("Valid", key="_SUBMIT_")
         ],
     ]
+
     window = sg.Window("WorkTimer: Connection", layout)
 
     pseudo = None
     while True:
-        event, values = window.read()
+        if pseudoAccepted:
+            break
+
+        event, values = window.read(100)
         if event == sg.WIN_CLOSED:
             pseudo = None
             break
@@ -56,14 +111,24 @@ def promptPseudo():
         if event == "_SUBMIT_":
             pseudo = values["_PSEUDO_"].strip()
             if len(pseudo) > 0:
-                break
+                send(MessageCode.LOGIN, pseudo)
+
+        # Pause
+        await asyncio.sleep(0)
 
     window.close()
 
-    return pseudo
+
+def getUserStateColor(userState):
+    return sg.theme_background_color() if userState == UserState.REST else (
+        "green" if userState == UserState.BREAK else "red")
 
 
-def genUserList(idx):
+def hasUserList():
+    return not win.was_closed() and winMode == WindowMode.NORMAL
+
+
+def genRandomUserList(idx):
     randomList = []
     for i in range(1, random.randrange(2, 11)):
         randomList.append(
@@ -71,8 +136,40 @@ def genUserList(idx):
     return randomList
 
 
-def mainWindow():
-    global pseudo, stime, inWork
+def genUserList():
+    global userIdx
+
+    userIdx += 1
+    return [
+        [
+            sg.Text(user["pseudo"], s=(14, None),
+                    k=f"_{user['pseudo'].lower()}_[{userIdx}]",
+                    background_color=getUserStateColor(user["state"])
+                    )
+        ]
+        for user in userList]
+
+
+def updateUserList():
+    if not hasUserList():
+        return
+
+    # Destroy UserList
+    win["_USER_LIST_"].Widget.children[
+        list(win["_USER_LIST_"].Widget.children.keys())[0]
+    ].destroy()
+
+    # Create it!
+    win.extend_layout(win["_USER_LIST_"], [
+        [
+            sg.Column(genUserList(), s=(107, 172),
+                      scrollable=True, vertical_scroll_only=True)
+        ]
+    ])
+
+
+async def mainWindow():
+    global stime, inWork, win, winMode
 
     # Set Theme
     sg.theme("Dark")
@@ -81,8 +178,6 @@ def mainWindow():
     timeFont = ("Arial", 56)
 
     # Left Panel
-    userIdx = 0
-
     userLayout = [
         [
             # [sg.Text("Naitomea", s=(15, None))],
@@ -102,7 +197,8 @@ def mainWindow():
         [sg.Frame("User:", userLayout)],
         [sg.Frame("Connected Users:", [
             [
-                sg.Column(genUserList(userIdx), s=(107, 172),
+                # sg.Column([], s=(107, 172),
+                sg.Column(genUserList(), s=(107, 172),
                           scrollable=True, vertical_scroll_only=True)
             ]
         ], k="_USER_LIST_")],
@@ -186,37 +282,22 @@ def mainWindow():
     win = sg.Window("WorkTimer", layout)
 
     # Main Loop
-    retVal = None
     while True:
-        event, values = win.read(500)
+        event, values = win.read(100)
 
         # Events Managing
         if event == sg.WIN_CLOSED:
+            winMode = None
             break
 
         # Minimized
         elif event == "_MINIMIZED_MODE_":
-            retVal = WindowMode.MINIMIZED
+            winMode = WindowMode.MINIMIZED
             break
 
         # Start/Resume Button
         if event == "_START_" or event == "_RESUME_":
             inWork, stime = True, time.time()
-
-            # Destroy UserList
-            win["_USER_LIST_"].Widget.children[
-                list(win["_USER_LIST_"].Widget.children.keys())[0]
-            ].destroy()
-
-            # Gen new UserList
-            userIdx += 1
-            userList = genUserList(userIdx)
-            win.extend_layout(win["_USER_LIST_"], [
-                [
-                    sg.Column(userList, s=(107, 172),
-                              scrollable=True, vertical_scroll_only=True)
-                ]
-            ])
 
         # Break Button
         elif event == "_BREAK_":
@@ -252,13 +333,14 @@ def mainWindow():
         win["_BREAK_BUTTONS_"].update(visible=not stime < 0 and inWork)
         win["_RESUME_BUTTONS_"].update(visible=not stime < 0 and not inWork)
 
+        # Pause
+        await asyncio.sleep(0)
+
     win.close()
 
-    return retVal
 
-
-def minimizedWindow():
-    global pseudo, stime, inWork
+async def minimizedWindow():
+    global stime, inWork, win, winMode
 
     # Set Theme
     sg.theme("Dark")
@@ -342,17 +424,17 @@ def minimizedWindow():
                     no_titlebar=True, grab_anywhere=True, keep_on_top=True)
 
     # Main Loop
-    retVal = None
     while True:
-        event, values = win.read(500)
+        event, values = win.read(100)
 
         # Events Managing
         if event == sg.WIN_CLOSED:
+            winMode = None
             break
 
         # Maximized
         elif event == "_NORMAL_MODE_":
-            retVal = WindowMode.NORMAL
+            winMode = WindowMode.NORMAL
             break
 
         # Start/Resume Button
@@ -393,48 +475,174 @@ def minimizedWindow():
         win["_BREAK_BUTTONS_"].update(visible=not stime < 0 and inWork)
         win["_RESUME_BUTTONS_"].update(visible=not stime < 0 and not inWork)
 
+        # Pause
+        await asyncio.sleep(0)
+
     win.close()
 
-    return retVal
 
-# Test
-async def hello():
-    global pseudo
-
-    uri = "ws://localhost:8080"
-    async with websockets.connect(uri) as ws:
-        data = json.dumps({
-            'code': 5,
-            'data': pseudo
-        })
-        await ws.send(data)
-        print(f"> {pseudo}")
-
-        greeting = await ws.recv()
-        print(f"< {greeting}")
-
-# Main entry
-def main():
-    global pseudo
+async def ui():
+    global winMode, running
 
     # Get Pseudo
-    # pseudo = promptPseudo()
-    # if pseudo is None:
-    #     return
-    pseudo = "Naitomea"
+    await promptPseudo()
+    if not pseudo is None:
+        # Launch windows loop (main loop)
+        winMode = WindowMode.NORMAL
+        while 42:
+            if winMode == WindowMode.NORMAL:
+                await mainWindow()
+            elif winMode == WindowMode.MINIMIZED:
+                await minimizedWindow()
 
-    asyncio.get_event_loop().run_until_complete(hello())
+            if winMode is None:
+                break
 
-    # Launch windows loop (main loop)
-    currentMode = WindowMode.NORMAL
-    while 42:
-        if currentMode == WindowMode.NORMAL:
-            currentMode = mainWindow()
-        elif currentMode == WindowMode.MINIMIZED:
-            currentMode = minimizedWindow()
+    running = False
 
-        if currentMode is None:
-            break
+###########
+# Network #
+###########
+
+
+def getUserId(pseudo):
+    return [i for i, v in enumerate(userList)
+            if v["pseudo"].lower() == pseudo.lower()][0]
+
+
+def send(code, data):
+    msgQueue.put_nowait({
+        "code": code,
+        "data": data
+    })
+
+
+async def producer():
+    while running:
+        if msgQueue.empty():
+            await asyncio.sleep(0)
+        else:
+            return msgQueue.get_nowait()
+
+
+async def producer_handler(ws):
+    while running:
+        message = await producer()
+        if not message == None:
+            print(f"[{timeToStr(time.time())}][NET SEND] {message}")
+            await ws.send(json.dumps(message))
+
+
+def on_login(data):
+    global pseudoAccepted, userList
+
+    if isinstance(data, bool):
+        pseudoAccepted = data
+    elif isinstance(data, str):
+        userList.append({
+            "pseudo": data,
+            "state": UserState.REST
+        })
+
+        updateUserList()
+
+
+def on_logout(data):
+    global userList
+
+    del userList[getUserId(data)]
+
+    updateUserList()
+
+
+def on_users(data):
+    global userList
+
+    userList = data
+
+    updateUserList()
+
+
+def on_action(data):
+    global userList
+
+    if "action" in data and "data" in data:
+        userState = UserState.WORK if data["action"] == ActionType.START else (
+            UserState.BREAK if data["action"] == ActionType.BREAK else UserState.REST)
+        
+        userList[getUserId(data["data"])]["state"] = userState
+
+        if hasUserList():
+            win[f"_{data['data'].lower()}_[{userIdx}]"].update(
+                background_color=getUserStateColor(userState))
+
+
+async def consumer(message):
+    message = json.loads(message)
+    print(f"[{timeToStr(time.time())}][NET RECV] {message}")
+
+    if "code" in message:
+        if message["code"] == MessageCode.ADMIN:
+            42
+        elif message["code"] == MessageCode.MESSAGE:
+            42
+        elif message["code"] == MessageCode.ACTION:
+            on_action(message["data"])
+        elif message["code"] == MessageCode.USERS:
+            on_users(message["data"])
+        elif message["code"] == MessageCode.LOGIN:
+            on_login(message["data"])
+        elif message["code"] == MessageCode.LOGOUT:
+            on_logout(message["data"])
+        elif message["code"] == MessageCode.SIGNUP:
+            42
+        else:
+            42
+
+    await asyncio.sleep(0)
+
+
+async def consumer_handler(ws):
+    async for message in ws:
+        await consumer(message)
+
+
+async def handler(ws):
+    consumer_task = asyncio.ensure_future(
+        consumer_handler(ws))
+    producer_task = asyncio.ensure_future(
+        producer_handler(ws))
+    done, pending = await asyncio.wait(
+        [consumer_task, producer_task],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    for task in pending:
+        task.cancel()
+
+
+async def net():
+    uri = "ws://localhost:31492"
+    async with websockets.connect(uri) as ws:
+        await handler(ws)
+
+##############
+# Main entry #
+##############
+
+
+async def wait_list():
+    await asyncio.wait([
+        asyncio.create_task(net()),
+        asyncio.create_task(ui())
+    ])
+
+
+def main():
+    global asyncLoop
+
+    asyncLoop = asyncio.get_event_loop()
+    asyncLoop.run_until_complete(wait_list())
 
 
 # Start
