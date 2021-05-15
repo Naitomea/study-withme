@@ -298,13 +298,17 @@ async def mainWindow():
         # Start/Resume Button
         if event == "_START_" or event == "_RESUME_":
             inWork, stime = True, time.time()
+            send(MessageCode.ACTION, ActionType.START)
 
         # Break Button
         elif event == "_BREAK_":
             inWork, stime = False, time.time()
+            send(MessageCode.ACTION, ActionType.BREAK)
+
         # Stop Button
         elif event == "_STOP_BREAK_" or event == "_STOP_RESUME_":
             stime = -1
+            send(MessageCode.ACTION, ActionType.STOP)
 
         # Update Times
         ctime = time.time()
@@ -440,13 +444,17 @@ async def minimizedWindow():
         # Start/Resume Button
         if event == "_START_" or event == "_RESUME_":
             inWork, stime = True, time.time()
+            send(MessageCode.ACTION, ActionType.START)
 
         # Break Button
         elif event == "_BREAK_":
             inWork, stime = False, time.time()
+            send(MessageCode.ACTION, ActionType.BREAK)
+
         # Stop Button
         elif event == "_STOP_BREAK_" or event == "_STOP_RESUME_":
             stime = -1
+            send(MessageCode.ACTION, ActionType.STOP)
 
         # Update Times
         ctime = time.time()
@@ -566,14 +574,14 @@ def on_users(data):
 def on_action(data):
     global userList
 
-    if "action" in data and "data" in data:
+    if "action" in data and "pseudo" in data:
         userState = UserState.WORK if data["action"] == ActionType.START else (
             UserState.BREAK if data["action"] == ActionType.BREAK else UserState.REST)
         
-        userList[getUserId(data["data"])]["state"] = userState
+        userList[getUserId(data["pseudo"])]["state"] = userState
 
         if hasUserList():
-            win[f"_{data['data'].lower()}_[{userIdx}]"].update(
+            win[f"_{data['pseudo'].lower()}_[{userIdx}]"].update(
                 background_color=getUserStateColor(userState))
 
 
