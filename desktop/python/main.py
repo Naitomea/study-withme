@@ -12,8 +12,9 @@ import queue
 
 from timeUtils import timeToStr
 
-
 # Enum WindowMode
+
+
 class WindowMode(Enum):
     NORMAL = "_NORMAL_"
     MINIMIZED = "_MINIMIZED_"
@@ -96,7 +97,7 @@ async def promptPseudo():
         ],
     ]
 
-    window = sg.Window("WorkTimer: Connection", layout)
+    window = sg.Window("Study-withme: Connection", layout)
 
     pseudo = None
     while True:
@@ -279,7 +280,7 @@ async def mainWindow():
     ]
 
     # Main Window
-    win = sg.Window("WorkTimer", layout)
+    win = sg.Window("Study-withme", layout)
 
     # Main Loop
     while True:
@@ -424,7 +425,7 @@ async def minimizedWindow():
     ]
 
     # Main Window
-    win = sg.Window("WorkTimer", layout, font=font, margins=(0, 0),
+    win = sg.Window("Study-withme", layout, font=font, margins=(0, 0),
                     no_titlebar=True, grab_anywhere=True, keep_on_top=True)
 
     # Main Loop
@@ -577,7 +578,7 @@ def on_action(data):
     if "action" in data and "pseudo" in data:
         userState = UserState.WORK if data["action"] == ActionType.START else (
             UserState.BREAK if data["action"] == ActionType.BREAK else UserState.REST)
-        
+
         userList[getUserId(data["pseudo"])]["state"] = userState
 
         if hasUserList():
@@ -630,7 +631,8 @@ async def handler(ws):
 
 
 async def net():
-    uri = "ws://localhost:31492"
+    # uri = "ws://localhost:31492"
+    uri = "ws://study-withme.herokuapp.com"
     async with websockets.connect(uri) as ws:
         await handler(ws)
 
