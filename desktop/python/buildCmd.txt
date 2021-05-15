@@ -1,0 +1,1 @@
+pyinstaller --onefile -w --hidden-import=websockets.legacy --hidden-import=websockets.legacy.client main.py
